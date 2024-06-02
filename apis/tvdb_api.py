@@ -1,7 +1,8 @@
+import tempfile
 from urllib.parse import urljoin
 from typing import Any, Optional
 import requests_cache
-from exceptions import APIError
+from exceptions.exceptions import APIError
 import requests
 
 class AuthToken:
@@ -26,12 +27,21 @@ class AuthToken:
         else:
             raise APIError(code=response.status_code, message="Failed to get token.")
 
+class TempCachedSession(requests_cache.CachedSession):
+    def __init__(self, *args, **kwargs):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        kwargs['cache'] = f"{self.temp_dir.name}/http_cache"
+        super().__init__(*args, **kwargs)
+    
+    def __del__(self):
+        self.temp_dir.cleanup()
+
 class Request:
     def __init__(self, base_url: str, headers: dict, timeout: int = 10, cache_name: str = 'http_cache', cache_expire_after: int = 300) -> None:
         self.base_url = base_url
         self.headers = headers
         self.timeout = timeout
-        self.session = requests_cache.CachedSession(cache_name, expire_after=cache_expire_after)
+        self.session = TempCachedSession(cache_name, expire_after=cache_expire_after)
     
     def construct_url(self, endpoint: str, **kwargs: Any) -> str:
         url = urljoin(self.base_url, endpoint)

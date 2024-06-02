@@ -1,7 +1,7 @@
 import json
 import time
-from tvdb_api import TVDBAPI
-from emby_api import EmbyAPI
+from apis.tvdb_api import TVDBAPI
+from apis.emby_api import EmbyAPI
 from pypresence import Presence
 
 def update_rpc_presence(media_info, rpc, tvdb):
