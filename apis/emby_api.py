@@ -1,5 +1,45 @@
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import urljoin
 import requests as req
+
+from exceptions.exceptions import EmbyError
+
+class Request:
+    def __init__(self, base_url: str, headers: dict, timeout: int = 10) -> None:
+        self.base_url = base_url
+        self.headers = headers
+        self.timeout = timeout
+        self.session = req.Session()
+    
+    def construct_url(self, endpoint: str, **kwargs: Any) -> str:
+        url = urljoin(self.base_url, endpoint)
+        sanitized_kwargs = {key: value for key, value in kwargs.items() if key.isalnum()}
+        if sanitized_kwargs:
+            url += '?'
+            url += '&'.join(f"{key}={value}" for key, value in sanitized_kwargs.items())
+        return url
+    
+    def get(self, endpoint: str, **kwargs: Any) -> dict:
+        url = self.construct_url(endpoint, **kwargs)
+        try:
+            response = self.session.get(url, headers=self.headers, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
+        except req.exceptions.RequestException as e:
+            raise EmbyError(code=500, message="Network error occurred during GET request.") from e
+    
+    def post(self, endpoint: str, data: Optional[dict] = None, **kwargs: Any) -> dict:
+        url = self.construct_url(endpoint, **kwargs)
+        try:
+            response = self.session.post(url, headers=self.headers, json=data, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
+        except req.exceptions.RequestException as e:
+            raise EmbyError(code=500, message="Network error occurred during POST request.") from e
+    
+    def clear_cache(self):
+        self.session.cache.clear()
+
 
 class EmbyAPI:
     def __init__(self, url, api_key):
@@ -8,84 +48,62 @@ class EmbyAPI:
         self.headers = {
             'X-Emby-Token': self.api_key
         }
+        self.request = Request(self.url, self.headers)
         
     def get_users(self):
-        url = f'{self.url}/emby/Users'
-        return req.get(url, headers=self.headers).json()
+        url = f'/emby/Users'
+        return self.request.get(url)
         
     def get_user_id(self, username):
         url = f'{self.url}/emby/Users'
-        response = req.get(url, headers=self.headers).json()
+        response = self.request.get(url, headers=self.headers)
         for user in response:
             if user['Name'].lower() == username.lower():
                 return user['Id']
         return {'error': 'User not found', 'username': username}
     
     def get_current_media(self, user_id: Optional[str] = None, username: Optional[str] = None):
-        if user_id is None and username is None:
-            return {'error': 'Please provide either user_id or username'}
-        
-        if user_id is None:
-            user_id = self.get_user_id(username)
-            if 'error' in user_id:
-                return user_id
-            
-        url = f'{self.url}/emby/Sessions'
-        response = req.get(url, headers=self.headers).json()
-        
-        for session in response:
+        assert user_id is not None or username is not None, 'Please provide either user_id or username'
+        user_id = user_id or self.get_user_id(username)
+        sessions = self.request.get('/emby/Sessions')
+        for session in sessions:
             if session.get('UserId') == user_id:
                 if 'NowPlayingItem' in session:
-                    current_media = {
+                    return {
                         'NowPlayingItem': session['NowPlayingItem'],
                         'PlayState': session.get('PlayState', {}),
-                        'debug_full_response': session,
+                        'debug_full_session': session
                     }
-                    return current_media
-                else:
-                    return {'message': 'No media currently playing'}
-        return {'error': 'User not found'}
+                return {'message': 'No media is currently playing.'}
+        raise EmbyError(404, f"User with ID '{user_id}' not found")
     
     def get_current_media_info(self, user_id: Optional[str] = None, username: Optional[str] = None):
-        if user_id is None and username is None: return {'error': 'Please provide either user_id or username'}
-        if user_id is None:
-            user_id = self.get_user_id(username)
-            if 'error' in user_id: return user_id
-        current_media = self.get_current_media(user_id)
-        if 'error' in current_media: return current_media
-        if 'message' in current_media: return current_media
-        now_playing_item, playstate = current_media.get('NowPlayingItem', {}), current_media.get('PlayState', {})
-        position_ticks = playstate.get('PositionTicks', 0)
-        position_seconds = position_ticks // 10000000
-        hours, remainder = divmod(position_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        position_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        imdb_url, imdb_id, tvdb_id = '', '', ''
-        external_urls = now_playing_item.get('ExternalUrls', [])
-        for url_info in external_urls:
-            if url_info.get('Name') == 'IMDb':
-                imdb_url = url_info.get('Url', '')
-                imdb_id = imdb_url.split('/')[-1]
-            elif url_info.get('Name') == 'TheTVDB':
-                tvdb_id = url_info.get('Url', '').split('=')[-1]
-        media_info = {
-            'name': now_playing_item.get('Name', ''),
-            'id': now_playing_item.get('Id', ''),
-            'path': now_playing_item.get('Path', ''),
-            'overview': now_playing_item.get('Overview', ''),
-            'production_year': now_playing_item.get('ProductionYear', ''),
-            'series_name': now_playing_item.get('SeriesName', ''),
-            'season_name': now_playing_item.get('SeasonName', ''),
-            'media_type': now_playing_item.get('MediaType', ''),
-            'width': now_playing_item.get('Width', 0),
-            'height': now_playing_item.get('Height', 0),
-            'runtimeticks': now_playing_item.get('RunTimeTicks', 0),
-            'ispaused': playstate.get('IsPaused', False),
-            'position_ticks': position_ticks,
-            'position_seconds': position_seconds,
-            'position_time': position_time,
+        media = self.get_current_media(user_id=user_id, username=username)
+        if 'message' in media: return media
+        item = media['NowPlayingItem']
+        state = media['PlayState']
+        ticks = state.get("PositionTicks", 0)
+        seconds = ticks // 10_000_000
+        position = f"{seconds//3600:02d}:{seconds%3600//60:02d}:{seconds%60:02d}"
+        imdb_url = next((url['Url'] for url in item.get('ExternalUrls', []) if url['Name'] == 'IMDb'), '')
+        tvdb_id = next((url['Url'].split('=')[-1] for url in item.get('ExternalUrls', []) if url['Name'] == 'TheTVDB'), '')
+        return {
+            'name': item.get('Name', ''),
+            'id': item.get('Id', ''),
+            'path': item.get('Path', ''),
+            'overview': item.get('Overview', ''),
+            'production_year': item.get('ProductionYear', ''),
+            'series_name': item.get('SeriesName', ''),
+            'season_name': item.get('SeasonName', ''),
+            'media_type': item.get('MediaType', ''),
+            'width': item.get('Width', 0),
+            'height': item.get('Height', 0),
+            'runtimeticks': item.get('RunTimeTicks', 0),
+            'ispaused': state.get('IsPaused', False),
+            'position_ticks': ticks,
+            'position_seconds': seconds,
+            'position_time': position,
             'imdb_url': imdb_url,
-            'imdb_id': imdb_id,
+            'imdb_id': imdb_url.split('/')[-1],
             'tvdb_id': tvdb_id,
         }
-        return media_info

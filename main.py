@@ -1,5 +1,6 @@
 import json
 import time
+import threading
 from apis.tvdb_api import TVDBAPI
 from apis.emby_api import EmbyAPI
 from pypresence import Presence
@@ -36,16 +37,16 @@ def main():
     print("Starting Discord RPC program...")
     data = open('config.json', 'r').read()
     config = json.loads(data)   
-    emby_api = EmbyAPI(config['emby_url'], config['emby_api_key'])
-    tvdb_api = TVDBAPI(api_key=config['tvdb_api_key'], timeout=10)
+    emby_api = EmbyAPI(config['EMBY_URL'], config['EMBY_API_KEY'])
+    tvdb_api = TVDBAPI(api_key=config['TVDB_API_KEY'], timeout=10)
     
-    rpc = Presence(config['client_id'])
+    rpc = Presence(config['CLIENT_ID'])
     rpc.connect()
     print("Connected to Discord RPC.")
     
     while True:
         print("Retrieving current media information from Emby...")
-        media_info = emby_api.get_current_media_info(username='testing')
+        media_info = emby_api.get_current_media_info(username=config['EMBY_USERNAME'])
         if 'error' not in media_info and 'message' not in media_info:
             print("Media information retrieved successfully.")
             update_rpc_presence(media_info, rpc, tvdb_api)
@@ -54,7 +55,7 @@ def main():
             rpc.clear()
 
         print("Waiting for 5 seconds before the next update...")
-        time.sleep(5)
+        time.sleep(1)
 
     rpc.close()
     print("Disconnected from Discord RPC.")

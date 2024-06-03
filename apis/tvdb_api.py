@@ -2,7 +2,7 @@ import tempfile
 from urllib.parse import urljoin
 from typing import Any, Optional
 import requests_cache
-from exceptions.exceptions import APIError
+from exceptions.exceptions import TVDBError
 import requests
 
 class AuthToken:
@@ -25,14 +25,14 @@ class AuthToken:
         if response.status_code == 200:
             return response.json()['data']['token']
         else:
-            raise APIError(code=response.status_code, message="Failed to get token.")
+            raise TVDBError(code=response.status_code, message="Failed to get token.")
 
 class TempCachedSession(requests_cache.CachedSession):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, cache_name=None, **kwargs):
         self.temp_dir = tempfile.TemporaryDirectory()
-        kwargs['cache'] = f"{self.temp_dir.name}/http_cache"
-        super().__init__(*args, **kwargs)
-    
+        cache_name = cache_name or f"{self.temp_dir.name}/http_cache"
+        super().__init__(cache_name=cache_name, **kwargs)
+ 
     def __del__(self):
         self.temp_dir.cleanup()
 
@@ -58,7 +58,7 @@ class Request:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            raise APIError(code=500, message="Network error occurred during GET request.") from e
+            raise TVDBError(code=500, message="Network error occurred during GET request.") from e
     
     def post(self, endpoint: str, data: Optional[dict] = None, **kwargs: Any) -> dict:
         url = self.construct_url(endpoint, **kwargs)
@@ -67,7 +67,7 @@ class Request:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            raise APIError(code=500, message="Network error occurred during POST request.") from e
+            raise TVDBError(code=500, message="Network error occurred during POST request.") from e
     
     def clear_cache(self):
         self.session.cache.clear()
@@ -87,11 +87,11 @@ class TVDBAPI:
         }
         
         self.request = Request(base_url=self.base_url, headers=self.headers, timeout=self.timeout)
-        
-    def search(self, query, **kwargs):
+
+    def search(self, query: str, **kwargs: Any) -> dict:
         return self.request.get("search", query=query, **kwargs)
-    
-    def get_thumbnail_from_search(self, query):
+
+    def get_thumbnail_from_search(self, query: str) -> dict:
         response = self.search(query)
         if response['data']:
             return response['data'][0]['thumbnail']

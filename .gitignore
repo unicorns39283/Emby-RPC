@@ -1,2 +1,4 @@
 config.json
 http_cache.sqlite
+tests/*.py
+tests/__pycache__/
